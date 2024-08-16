@@ -31,11 +31,11 @@ def get_rotary_position_encoding(shape, num_frequencies, device):
 
 def apply_rotary_encoding(x: torch.Tensor, pos_enc: torch.Tensor):
     b, h, w, c = x.shape
-    x = x.view(b, h, w, c // 2, 2)
+    x = x.view(b, h, w, c // 2, 2).contiguous()
     x = torch.view_as_complex(x)
     x = x * pos_enc
     x = torch.view_as_real(x)
-    x = x.view(b, h, w, c)
+    x = x.view(b, h, w, c).contiguous()
     return x
 
 
@@ -90,16 +90,18 @@ class FractionatedPoolFormerBlock(nn.Module):
         )
 
     def forward(self, x):
+
         residual = x
 
         x = self.norm_a(x)
         x = self.pool(x)
 
-        x = x + residual
+        x = (x + residual) / 2
         residual = x
 
         x = self.norm_b(x)
-        x = x + self.mlp(x)
+        x = self.mlp(x)
 
         x = x + residual
+
         return x

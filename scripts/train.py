@@ -17,8 +17,8 @@ ic.configureOutput(includeContext=True)
 from ..src.model import FractionatedPoolFormer
 
 model_args = dict(
-    blocks=20,
-    channels=100,
+    blocks=10,
+    channels=60,
     levels=5,
 )
 
