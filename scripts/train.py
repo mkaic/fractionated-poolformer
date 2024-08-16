@@ -1,0 +1,205 @@
+import warnings
+from argparse import ArgumentParser
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import torchvision.transforms as tvt
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from torchvision.datasets import CIFAR100, CIFAR10
+from tqdm import tqdm
+import wandb
+from icecream import ic
+
+ic.configureOutput(includeContext=True)
+
+from ..src.model import FractionatedPoolFormer
+
+model_args = dict(
+    blocks=10,
+    channels=60,
+    levels=5,
+)
+
+config = dict(
+    **model_args,
+    batch_size=128,
+    lr=[(0, 1e-3), (100, 1e-4)],
+    data_aug=False,
+)
+
+
+warnings.filterwarnings(
+    "ignore", "Torchinductor does not support code generation for complex operators"
+)
+
+parser = ArgumentParser()
+parser.add_argument("-n", "--name", type=str, default=None)
+parser.add_argument("-g", "--gpu", type=int, default=0)
+parser.add_argument("-p", "--print_params", action="store_true", default=False)
+parser.add_argument("-c", "--ckpt", type=str, default=None)
+parser.add_argument("-l", "--logs", action="store_true", default=False)
+parser.add_argument("-d", "--debug", action="store_true", default=False)
+args = parser.parse_args()
+
+DEVICE = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
+
+if args.debug:
+    ic.enable()
+    torch.autograd.set_detect_anomaly(True)
+else:
+    ic.disable()
+    torch.autograd.set_detect_anomaly(False)
+
+
+EPOCHS = 1000
+SAVE = True
+
+print(model_args)
+
+if not Path("fractionated_poolformer/weights").exists():
+    Path("fractionated_poolformer/weights").mkdir(parents=True)
+
+loss_function = nn.CrossEntropyLoss()
+
+model = FractionatedPoolFormer(num_classes=10, input_channels=3, **model_args)
+
+if args.ckpt is not None:
+    print(f"Loading weights from {args.ckpt}")
+    weights = torch.load(args.ckpt)
+    print(model.load_state_dict(weights))
+
+model = model.to(DEVICE)
+
+optimizer = AdamW(model.parameters(), lr=config["lr"][0][1], weight_decay=0.01)
+
+if args.print_params:
+    print(model)
+
+num_params = sum([p.numel() for p in model.parameters()])
+
+print(f"{num_params:,} trainable parameters")
+
+if not args.print_params:
+
+    config["num_params"] = num_params
+
+    if args.logs:
+        wandb.init(project="fractionated_poolformer", config=config, name=args.name)
+        include_fn = lambda path: path.endswith(".py")
+        wandb.run.log_code("./fractionated_poolformer", include_fn=include_fn)
+        wandb.watch(model, log="parameters", log_freq=390)
+
+    transform = (
+        tvt.Compose(
+            [
+                tvt.RandomHorizontalFlip(),
+                tvt.RandomAffine(degrees=15, translate=(0.1, 0.1)),
+                tvt.ToTensor(),
+            ]
+        )
+        if config["data_aug"]
+        else tvt.ToTensor()
+    )
+
+    train = CIFAR10(
+        root="./fractionated_poolformer/data",
+        train=True,
+        download=True,
+        transform=transform,
+    )
+    test = CIFAR10(
+        root="./fractionated_poolformer/data", train=False, download=True, transform=tvt.ToTensor()
+    )
+
+    train_loader = DataLoader(
+        train,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        drop_last=True,
+        num_workers=4,
+    )
+    test_loader = DataLoader(
+        test,
+        batch_size=config["batch_size"],
+        shuffle=False,
+        drop_last=True,
+        num_workers=4,
+    )
+
+    # Train the model
+
+    train_accuracy = 0
+    test_accuracy = 0
+    for epoch in range(EPOCHS):
+
+        for e, lr in config["lr"]:
+            if epoch == e:
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = lr
+
+        model.train()
+        pbar = tqdm(train_loader, leave=False)
+
+        total = 0
+        correct = 0
+        losses = []
+        for step, (images, labels) in enumerate(pbar):
+            optimizer.zero_grad()
+
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            images, labels = images.to(torch.float32), labels.to(torch.long)
+
+            predictions = model(images)
+
+            _, predicted = torch.max(predictions, dim=-1)
+
+            if step > len(train_loader) * 0.9:
+                total += labels.shape[0]
+                correct += (predicted == labels).sum().item()
+
+            loss = loss_function(predictions, labels)
+
+            losses.append(loss.item())
+            loss.backward()
+
+            optimizer.step()
+
+            pbar.set_description(
+                f"Epoch {epoch} | Train Loss: {loss.item():.4f} | Train Acc: {train_accuracy:.2%} | Test Acc: {test_accuracy:.2%}"
+            )
+
+        train_accuracy = correct / total
+
+        model.eval()
+        if SAVE:
+            torch.save(model.state_dict(), f"fractionated_poolformer/weights/{epoch:03d}.ckpt")
+
+        total = 0
+        correct = 0
+        with torch.no_grad():
+            for images, labels in tqdm(test_loader, leave=False):
+
+                images: torch.Tensor
+                labels: torch.Tensor
+
+                images, labels = images.to(DEVICE), labels.to(DEVICE)
+                images, labels = images.to(torch.float32), labels.to(torch.long)
+
+                predictions = model(images)
+                _, predicted = torch.max(predictions, dim=1)
+
+                total += labels.shape[0]
+                correct += (predicted == labels).sum().item()
+
+        test_accuracy = correct / total
+
+        if args.logs:
+            wandb.log(
+                {
+                    "train_loss": torch.tensor(losses).mean(),
+                    "train_accuracy": train_accuracy,
+                    "test_accuracy": test_accuracy,
+                }
+            )
