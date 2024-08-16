@@ -17,8 +17,8 @@ ic.configureOutput(includeContext=True)
 from ..src.model import FractionatedPoolFormer
 
 model_args = dict(
-    blocks=10,
-    channels=60,
+    blocks=20,
+    channels=100,
     levels=5,
 )
 
@@ -110,7 +110,10 @@ if not args.print_params:
         transform=transform,
     )
     test = CIFAR10(
-        root="./fractionated_poolformer/data", train=False, download=True, transform=tvt.ToTensor()
+        root="./fractionated_poolformer/data",
+        train=False,
+        download=True,
+        transform=tvt.ToTensor(),
     )
 
     train_loader = DataLoader(
@@ -174,7 +177,9 @@ if not args.print_params:
 
         model.eval()
         if SAVE:
-            torch.save(model.state_dict(), f"fractionated_poolformer/weights/{epoch:03d}.ckpt")
+            torch.save(
+                model.state_dict(), f"fractionated_poolformer/weights/{epoch:03d}.ckpt"
+            )
 
         total = 0
         correct = 0

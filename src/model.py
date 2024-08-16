@@ -1,7 +1,12 @@
 import torch
 import torch.nn as nn
 
-from .layers import get_rotary_position_encoding, apply_rotary_encoding, FractionatedPoolFormerBlock
+from .layers import (
+    get_rotary_position_encoding,
+    apply_rotary_encoding,
+    FractionatedPoolFormerBlock,
+)
+
 
 class FractionatedPoolFormer(nn.Module):
     def __init__(
@@ -10,7 +15,7 @@ class FractionatedPoolFormer(nn.Module):
         blocks,
         channels,
         levels,
-        input_channels = 3,
+        input_channels=3,
     ):
         super().__init__()
         self.input_channels = input_channels
@@ -32,15 +37,12 @@ class FractionatedPoolFormer(nn.Module):
 
         self.pos_enc = None
 
-
     def forward(
         self,
         x: torch.Tensor,
     ) -> torch.Tensor:
 
-
         b, c, h, w = x.shape
-
 
         x = torch.movedim(x, 1, -1)  # B, C, H, W -> B, H, W, C
         x = self.proj_in(x)  # increase channel count
@@ -48,7 +50,7 @@ class FractionatedPoolFormer(nn.Module):
         if self.pos_enc is None:
             self.pos_enc = get_rotary_position_encoding(
                 shape=(h, w),
-                num_frequencies = self.channels // 4,
+                num_frequencies=self.channels // 4,
                 device=x.device,
             )
 

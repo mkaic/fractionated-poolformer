@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 def get_rotary_position_encoding(shape, num_frequencies, device):
 
     positions = torch.stack(
@@ -27,34 +28,44 @@ def get_rotary_position_encoding(shape, num_frequencies, device):
 
     return positions
 
+
 def apply_rotary_encoding(x: torch.Tensor, pos_enc: torch.Tensor):
     b, h, w, c = x.shape
-    x = x.view(b, h, w, c//2, 2)
+    x = x.view(b, h, w, c // 2, 2)
     x = torch.view_as_complex(x)
     x = x * pos_enc
     x = torch.view_as_real(x)
     x = x.view(b, h, w, c)
     return x
 
+
 class FractionatedAvgPool2d(nn.Module):
-    def __init__(self, levels = 5):
+    def __init__(self, levels=5):
         super().__init__()
         self.levels = levels
         self.padding_layers = nn.ModuleList()
         self.pooling_layers = nn.ModuleList()
         for i in range(1, levels):
-            kernel_size = 2 ** i
+            kernel_size = 2**i
             # "same" padding
             padding_big = kernel_size // 2
             padding_small = padding_big - 1
-            self.padding_layers.append(nn.CircularPad2d((padding_big, padding_small, padding_big, padding_small)))
-            self.pooling_layers.append(nn.AvgPool2d(kernel_size=kernel_size, stride=1)) # 2, 4, 8, 16 etc
+            self.padding_layers.append(
+                nn.CircularPad2d(
+                    (padding_big, padding_small, padding_big, padding_small)
+                )
+            )
+            self.pooling_layers.append(
+                nn.AvgPool2d(kernel_size=kernel_size, stride=1)
+            )  # 2, 4, 8, 16 etc
 
     def forward(self, x):
         x = torch.movedim(x, -1, 1)
         channel_chunks = torch.chunk(x, self.levels, dim=1)
         pooled = [channel_chunks[0]]
-        for chunk, pad, pool in zip(channel_chunks[1:], self.padding_layers, self.pooling_layers):
+        for chunk, pad, pool in zip(
+            channel_chunks[1:], self.padding_layers, self.pooling_layers
+        ):
             chunk = pad(chunk)
             pooled.append(pool(chunk))
 
@@ -62,8 +73,9 @@ class FractionatedAvgPool2d(nn.Module):
         x = torch.movedim(x, 1, -1)
         return x
 
+
 class FractionatedPoolFormerBlock(nn.Module):
-    def __init__(self, channels, levels = 5):
+    def __init__(self, channels, levels=5):
         super().__init__()
         self.channels = channels
         self.levels = levels
